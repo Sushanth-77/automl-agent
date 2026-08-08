@@ -226,8 +226,7 @@ def invoke_llm(
         mock_mode = _is_mock_mode()
 
     if mock_mode or llm is None:
-        canned = _MOCK_RESPONSES.get(agent_name, {"mock": f"[MOCK] No canned response for '{agent_name}'"})
-        return json.dumps(canned, indent=2)
+        return _get_mock_response(agent_name, user_prompt)
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -237,6 +236,44 @@ def invoke_llm(
     ]
     response = llm.invoke(messages)
     return response.content
+
+
+def _get_mock_response(agent_name: str, user_prompt: str = "") -> str:
+    """
+    Return a deterministic mock response for the given agent.
+
+    For task_inference, we actually inspect the user_prompt to return the
+    correct task type (regression vs classification) based on n_unique.
+    This keeps the mock realistic without API calls.
+    """
+    if agent_name == "task_inference":
+        # Try to extract n_unique from the prompt JSON
+        try:
+            import re
+            m = re.search(r'"n_unique":\s*(\d+)', user_prompt)
+            n_unique = int(m.group(1)) if m else 2
+        except Exception:
+            n_unique = 2
+
+        if n_unique > 20:
+            return json.dumps({
+                "task_type": "regression",
+                "reasoning": (
+                    f"[MOCK] Target column has {n_unique} unique values with a wide numeric range "
+                    "→ continuous regression task. SalePrice-style targets are predicted as real values."
+                ),
+            })
+        else:
+            return json.dumps({
+                "task_type": "classification",
+                "reasoning": (
+                    f"[MOCK] Target column has {n_unique} unique values (0, 1) "
+                    "→ binary classification."
+                ),
+            })
+
+    canned = _MOCK_RESPONSES.get(agent_name, {"mock": f"[MOCK] No canned response for '{agent_name}'"})
+    return json.dumps(canned, indent=2)
 
 
 def get_mock_mode() -> bool:

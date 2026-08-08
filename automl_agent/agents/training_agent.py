@@ -55,15 +55,21 @@ def run_training_agent(state: PipelineState) -> PipelineState:
     trained_models = list(state.get("trained_models", []))
 
     for candidate in candidates:
-        model_id = candidate["model_id"]
+        # Rebase model ID to the *current* iteration so each loop creates new entries
+        original_id = candidate["model_id"]
+        # Strip any existing iterN_ prefix and re-stamp with current iteration
+        bare_id = original_id.split("_", 1)[1] if original_id.startswith("iter") else original_id
+        model_id = f"iter{iteration}_{bare_id}"
         model_family = candidate["model_family"]
         params = candidate.get("params", {})
 
         logger.info(f"    Training '{model_id}' ({model_family}) ...")
         try:
+            # Build a per-iteration candidate dict with the corrected model_id
+            iter_candidate = {**candidate, "model_id": model_id}
             estimator, artifact_path = train_model(
                 X_train, y_train,
-                model_config=candidate,
+                model_config=iter_candidate,
                 task_type=task_type,
                 artifact_dir=artifact_dir,
             )
