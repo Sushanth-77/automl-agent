@@ -347,3 +347,102 @@ def split_data(
         )
 
     return X_train, X_test, y_train, y_test
+
+
+# ── Optuna HPO ────────────────────────────────────────────────────────────────
+
+def optuna_tune(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    model_family: str,
+    task_type: str,
+    n_trials: int = 20,
+    cv_folds: int = 3,
+    random_state: int = 42,
+) -> tuple[dict[str, Any], float]:
+    """
+    Run Bayesian hyperparameter optimisation with Optuna.
+
+    Returns (best_params, best_cv_score) for the given model_family and task.
+    In mock mode callers should pass n_trials=1 to skip real search.
+
+    The search space is deliberately narrow to keep runtime reasonable:
+      - RandomForest / GBM: n_estimators, max_depth, min_samples_leaf
+      - XGBoost / LightGBM: n_estimators, max_depth, learning_rate, subsample
+      - LogisticRegression / Ridge: C / alpha
+    """
+    import optuna
+    from sklearn.model_selection import cross_val_score
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    primary_metric = "f1_weighted" if task_type == "classification" else "neg_root_mean_squared_error"
+    direction = "maximize"  # cross_val_score maximises both (neg_rmse is maximised toward 0)
+
+    def objective(trial: optuna.Trial) -> float:
+        family = model_family.lower()
+        params: dict[str, Any] = {}
+
+        if family == "random_forest":
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 3, 12),
+                "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+            }
+        elif family in ("gradient_boosting",):
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 300),
+                "max_depth": trial.suggest_int("max_depth", 2, 8),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            }
+        elif family == "xgboost":
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 2, 10),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            }
+        elif family == "lightgbm":
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 50, 400),
+                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "num_leaves": trial.suggest_int("num_leaves", 20, 150),
+                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            }
+        elif family == "logistic_regression":
+            params = {
+                "C": trial.suggest_float("C", 1e-3, 10.0, log=True),
+                "max_iter": trial.suggest_int("max_iter", 200, 1000),
+            }
+        elif family == "ridge":
+            params = {
+                "alpha": trial.suggest_float("alpha", 1e-3, 100.0, log=True),
+            }
+        else:
+            return 0.0
+
+        params["random_state"] = random_state
+        estimator = _build_estimator(model_family, params, task_type)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            scores = cross_val_score(
+                estimator, X_train, y_train,
+                cv=cv_folds,
+                scoring=primary_metric,
+                n_jobs=-1,
+            )
+        return float(scores.mean())
+
+    sampler = optuna.samplers.TPESampler(seed=random_state)
+    study = optuna.create_study(direction=direction, sampler=sampler)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+    best_params = {k: v for k, v in study.best_params.items()}
+    best_params["random_state"] = random_state
+    best_score = study.best_value
+
+    return best_params, best_score

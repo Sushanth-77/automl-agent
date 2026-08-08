@@ -44,3 +44,8 @@ PRIMARY_METRICS = {
 CLASSIFICATION_METRICS = ["accuracy", "f1_weighted", "precision_weighted",
                            "recall_weighted", "roc_auc"]
 REGRESSION_METRICS = ["rmse", "mae", "r2"]
+
+# ── Optuna HPO ───────────────────────────────────────────────────────────────
+# Number of trials per model in live mode. In mock mode the training_agent
+# falls back to a single trial (no real search needed).
+OPTUNA_TRIALS: int = int(os.getenv("OPTUNA_TRIALS", "20"))
