@@ -200,10 +200,60 @@ with st.sidebar:
     }
     target_col = st.text_input(
         "Target Column",
-        value=default_targets[dataset_choice],
+        value=default_targets.get(dataset_choice, "target"),
         key="target_col",
         help="Column to predict. Leave as default or override.",
     )
+
+    # ── Custom CSV Upload (F5) ─────────────────────────────────────────────
+    with st.expander("📁 Upload Your Own CSV", expanded=False):
+        uploaded_file = st.file_uploader(
+            "Upload a CSV file",
+            type=["csv"],
+            key="csv_uploader",
+            help="Upload any tabular CSV. After uploading, select the target column below.",
+        )
+        if uploaded_file is not None:
+            import pandas as _pd_up
+            import tempfile
+            from pathlib import Path as _Path
+
+            # Read to detect columns
+            try:
+                _df_preview = _pd_up.read_csv(uploaded_file)
+                uploaded_file.seek(0)  # reset for saving
+
+                st.write(f"**{uploaded_file.name}** — {_df_preview.shape[0]} rows × {_df_preview.shape[1]} cols")
+                st.dataframe(_df_preview.head(3), use_container_width=True, hide_index=True)
+
+                custom_target = st.selectbox(
+                    "Select target column",
+                    options=list(_df_preview.columns),
+                    key="custom_target_col",
+                )
+
+                if st.button("✅ Use this dataset", key="use_custom_csv"):
+                    # Save to a stable temp path
+                    upload_dir = Path("runs") / "uploads"
+                    upload_dir.mkdir(parents=True, exist_ok=True)
+                    save_path = upload_dir / uploaded_file.name
+                    save_path.write_bytes(uploaded_file.read())
+                    st.session_state.custom_dataset_path = str(save_path)
+                    st.session_state.custom_target_col = custom_target
+                    st.success(f"Custom dataset ready! Target: `{custom_target}`")
+            except Exception as _e:
+                st.error(f"Failed to read CSV: {_e}")
+
+    # Show custom dataset status
+    if st.session_state.get("custom_dataset_path"):
+        st.info(
+            f"📁 Custom: `{Path(st.session_state.custom_dataset_path).name}` → "
+            f"`{st.session_state.get('custom_target_col', '?')}`"
+        )
+        if st.button("❌ Clear custom dataset", key="clear_custom"):
+            st.session_state.custom_dataset_path = None
+            st.session_state.custom_target_col = None
+            st.rerun()
 
     max_iterations = st.slider(
         "Max Improvement Iterations",
@@ -245,6 +295,39 @@ with st.sidebar:
         unsafe_allow_html=False,
     )
 
+    # ── Run History Browser (F6) ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🕐 Past Runs")
+    try:
+        from automl_agent.run_utils import list_runs
+        past_runs = list_runs()
+        if past_runs:
+            for run in past_runs[:10]:  # show last 10
+                metric_str = (
+                    f"{run['primary_metric']}={run['best_metric_value']:.4f}"
+                    if run["best_metric_value"] is not None else "N/A"
+                )
+                label = (
+                    f"📅 {run['timestamp']} | {run['dataset']} | {metric_str}"
+                )
+                with st.expander(label, expanded=False):
+                    st.markdown(f"**Run ID:** `{run['run_id']}`")
+                    st.markdown(f"**Task:** {run['task_type']} | **Models:** {run['n_models']} | **Iters:** {run['n_iterations']}")
+                    st.markdown(f"**Best model:** `{run['best_model']}`")
+                    st.markdown(f"**Stop reason:** {run['stop_reason']}")
+                    col_load, col_dir = st.columns(2)
+                    with col_load:
+                        if st.button("📥 Load into dashboard", key=f"load_{run['run_id']}"):
+                            st.session_state.pipeline_state = run["state"]
+                            st.success("Loaded! Switch to Results tab.")
+                            st.rerun()
+                    with col_dir:
+                        st.markdown(f"`{run['run_dir']}`")
+        else:
+            st.info("No completed runs yet. Run the pipeline first.")
+    except Exception as _hist_err:
+        st.warning(f"Could not load run history: {_hist_err}")
+
 # ── Main area ──────────────────────────────────────────────────────────────────
 
 # Session state initialisation
@@ -282,16 +365,23 @@ with tab_run:
         else:
             os.environ.pop("MOCK_MODE", None)
 
-        from automl_agent.data.loader import load_dataset
+        from automl_agent.data.loader import load_dataset, load_from_path
         from automl_agent.graph import run_pipeline
 
         with st.status("🚀 Running AutoML Agent pipeline...", expanded=True) as status:
 
-            # Load dataset
-            st.write(f"📂 Loading `{dataset_choice}` dataset...")
+            # Load dataset — custom upload takes priority
+            custom_path = st.session_state.get("custom_dataset_path")
+            custom_target = st.session_state.get("custom_target_col")
             try:
-                dataset_info = load_dataset(dataset_choice)
-                target = target_col or dataset_info.target_column
+                if custom_path and custom_target:
+                    st.write(f"📂 Loading custom dataset: `{Path(custom_path).name}`...")
+                    dataset_info = load_from_path(custom_path, custom_target)
+                    target = custom_target
+                else:
+                    st.write(f"📂 Loading `{dataset_choice}` dataset...")
+                    dataset_info = load_dataset(dataset_choice)
+                    target = target_col or dataset_info.target_column
                 st.write(f"✅ Dataset loaded: {dataset_info.df.shape[0]} rows × {dataset_info.df.shape[1]} cols")
             except Exception as e:
                 st.error(f"❌ Dataset load failed: {e}")
@@ -498,6 +588,46 @@ with tab_results:
 
         st.markdown("---")
 
+        # ── Calibration / Prediction Intervals (F4) ─────────────────────────
+        with st.expander("🎯 Calibration & Confidence Intervals", expanded=False):
+            task = state.get("task_type", "classification")
+            if task == "classification":
+                cal = state.get("calibration_data", {})
+                if cal:
+                    import pandas as pd
+                    col_cal1, col_cal2 = st.columns([2, 1])
+                    with col_cal1:
+                        st.markdown("**Reliability Diagram** (fraction of positives vs mean predicted prob)")
+                        cal_df = pd.DataFrame({
+                            "Mean Predicted Prob": cal.get("mean_predicted_value", []),
+                            "Fraction of Positives": cal.get("fraction_of_positives", []),
+                        })
+                        if not cal_df.empty:
+                            st.line_chart(cal_df.set_index("Mean Predicted Prob"))
+                    with col_cal2:
+                        st.metric("ECE", f"{cal.get('ece', 'N/A'):.4f}", help="Expected Calibration Error — lower is better")
+                        st.metric("Brier Score", f"{cal.get('brier_score', 'N/A'):.4f}", help="Brier Score — lower is better (max 1)")
+                        if cal.get("ece", 1) < 0.05:
+                            st.success("Well calibrated")
+                        elif cal.get("ece", 1) < 0.15:
+                            st.warning("Moderate calibration gap")
+                        else:
+                            st.error("Poor calibration — consider CalibratedClassifierCV")
+                else:
+                    st.info("Calibration data will appear here after the pipeline runs.")
+            else:
+                pi = state.get("prediction_intervals", {})
+                if pi:
+                    col_p1, col_p2 = st.columns(2)
+                    with col_p1:
+                        st.metric(f"{int(pi.get('confidence', 0.9)*100)}% CI Mean Width", f"{pi.get('mean_interval_width', 'N/A'):,.0f}")
+                        st.metric("Empirical Coverage", f"{pi.get('empirical_coverage', 0):.1%}")
+                    with col_p2:
+                        st.metric("Bootstrap Samples", pi.get("n_bootstrap", "N/A"))
+                        st.metric("Median CI Width", f"{pi.get('median_interval_width', 'N/A'):,.0f}")
+                else:
+                    st.info("Prediction intervals will appear after a regression run.")
+
         # ── Cleaning log
         with st.expander("🧹 Data Cleaning Log", expanded=False):
             cleaning_log = state.get("cleaning_log", [])
@@ -546,13 +676,121 @@ with tab_report:
             report_md = report_path.read_text(encoding="utf-8")
             st.markdown(report_md)
 
-            st.download_button(
-                label="⬇️ Download Report (Markdown)",
-                data=report_md,
-                file_name="automl_agent_report.md",
-                mime="text/markdown",
-                key="download_report",
-            )
+            # ── Download buttons (F7) ─────────────────────────────────────
+            dl_col1, dl_col2, dl_col3 = st.columns(3)
+
+            with dl_col1:
+                st.download_button(
+                    label="⬇️ Download Report (Markdown)",
+                    data=report_md,
+                    file_name="automl_agent_report.md",
+                    mime="text/markdown",
+                    key="download_report_md",
+                )
+
+            with dl_col2:
+                # PDF export via reportlab
+                try:
+                    from io import BytesIO
+                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                    from reportlab.lib.units import cm
+                    from reportlab.lib import colors
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+                    from reportlab.lib.enums import TA_LEFT
+
+                    def _build_pdf(markdown_text: str, state_meta: dict) -> bytes:
+                        buf = BytesIO()
+                        doc = SimpleDocTemplate(
+                            buf, pagesize=A4,
+                            rightMargin=2*cm, leftMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm,
+                        )
+                        styles = getSampleStyleSheet()
+                        title_style = ParagraphStyle(
+                            "Title", parent=styles["Heading1"],
+                            fontSize=18, textColor=colors.HexColor("#2d3748"),
+                            spaceAfter=12,
+                        )
+                        h2_style = ParagraphStyle(
+                            "H2", parent=styles["Heading2"],
+                            fontSize=13, textColor=colors.HexColor("#4a5568"),
+                            spaceBefore=10, spaceAfter=6,
+                        )
+                        body_style = ParagraphStyle(
+                            "Body", parent=styles["Normal"],
+                            fontSize=10, leading=14, textColor=colors.HexColor("#1a202c"),
+                        )
+                        meta_style = ParagraphStyle(
+                            "Meta", parent=styles["Normal"],
+                            fontSize=9, textColor=colors.grey,
+                        )
+
+                        story = []
+                        story.append(Paragraph("AutoML Agent — Pipeline Report", title_style))
+                        story.append(HRFlowable(width="100%", color=colors.HexColor("#667eea")))
+                        story.append(Spacer(1, 0.3*cm))
+
+                        # Metadata block
+                        meta_lines = [
+                            f"Task type: {state_meta.get('task_type', '?')}",
+                            f"Best model: {state_meta.get('_current_best_model_id', '?')}",
+                            f"Stop reason: {state_meta.get('stop_reason', '?')}",
+                            f"Iterations: {state_meta.get('iteration', '?')}",
+                        ]
+                        for line in meta_lines:
+                            story.append(Paragraph(line, meta_style))
+                        story.append(Spacer(1, 0.5*cm))
+                        story.append(HRFlowable(width="100%", color=colors.lightgrey))
+                        story.append(Spacer(1, 0.3*cm))
+
+                        # Report body — convert markdown headings to reportlab paragraphs
+                        for line in markdown_text.splitlines():
+                            line = line.strip()
+                            if not line:
+                                story.append(Spacer(1, 0.2*cm))
+                            elif line.startswith("## "):
+                                story.append(Paragraph(line[3:], h2_style))
+                            elif line.startswith("# "):
+                                story.append(Paragraph(line[2:], title_style))
+                            elif line.startswith("- ") or line.startswith("* "):
+                                story.append(Paragraph(f"• {line[2:]}", body_style))
+                            else:
+                                # Escape HTML chars for reportlab
+                                safe = (line.replace("&", "&amp;")
+                                             .replace("<", "&lt;").replace(">", "&gt;"))
+                                story.append(Paragraph(safe, body_style))
+
+                        doc.build(story)
+                        return buf.getvalue()
+
+                    pdf_bytes = _build_pdf(report_md, state)
+                    st.download_button(
+                        label="📄 Download Report (PDF)",
+                        data=pdf_bytes,
+                        file_name="automl_agent_report.pdf",
+                        mime="application/pdf",
+                        key="download_report_pdf",
+                    )
+                except ImportError:
+                    st.info("Install `reportlab` for PDF export.")
+                except Exception as pdf_err:
+                    st.warning(f"PDF generation failed: {pdf_err}")
+
+            with dl_col3:
+                import json as _json
+                state_json = _json.dumps(
+                    {k: v for k, v in state.items() if not k.startswith("_")},
+                    indent=2, default=str,
+                )
+                st.download_button(
+                    label="🗂️ Download State (JSON)",
+                    data=state_json,
+                    file_name="automl_agent_state.json",
+                    mime="application/json",
+                    key="download_state_json",
+                )
+
         else:
             sections = state.get("report_sections", {})
             if sections:

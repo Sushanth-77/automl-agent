@@ -299,6 +299,8 @@ def run_pipeline(
         "stop_reason": None,
         "report_sections": {},
         "feature_importance": {},
+        "calibration_data": {},
+        "prediction_intervals": {},
         "_cleaned_df_path": "",
         "_feature_df_path": "",
         "_current_best_model_id": "",

@@ -24,7 +24,8 @@ import pandas as pd
 from automl_agent.run_utils import get_run_dir
 from automl_agent.state import EvalResult, PipelineState
 from automl_agent.tools.model_tools import (
-    cross_validate_model, evaluate_model, get_feature_importance, load_model,
+    cross_validate_model, evaluate_model, get_calibration_data,
+    get_feature_importance, get_prediction_intervals, load_model,
 )
 from config import PRIMARY_METRICS
 
@@ -182,10 +183,32 @@ def run_evaluation_agent(state: PipelineState) -> PipelineState:
             except Exception as fi_err:
                 logger.warning(f"  Feature importance extraction failed: {fi_err}")
 
+    # ── Calibration / prediction intervals (F4) ────────────────────────────────
+    calibration_data: dict = state.get("calibration_data", {})
+    prediction_intervals: dict = state.get("prediction_intervals", {})
+    if best_entry and best_entry.get("artifact_path"):
+        try:
+            if not hasattr(best_est, '_fitted_already'):  # reuse from FI block if possible
+                best_est = load_model(best_entry["artifact_path"])
+            if task_type == "classification":
+                cal = get_calibration_data(best_est, X_test, y_test)
+                if cal:
+                    calibration_data = cal
+                    logger.info(f"  ✓ Calibration data: ECE={cal.get('ece', '?'):.4f}, Brier={cal.get('brier_score', '?'):.4f}")
+            else:
+                pi = get_prediction_intervals(best_est, X_test, y_test, confidence=0.90, n_bootstrap=30)
+                if pi:
+                    prediction_intervals = pi
+                    logger.info(f"  ✓ Prediction intervals: coverage={pi.get('empirical_coverage', '?'):.2%}")
+        except Exception as cal_err:
+            logger.warning(f"  Calibration/interval computation failed: {cal_err}")
+
     return {
         **state,
         "eval_results": eval_results,
         "_current_best_model_id": global_best_model_id,
         "_previous_best_metric": global_best_metric,
         "feature_importance": feature_importance,
+        "calibration_data": calibration_data,
+        "prediction_intervals": prediction_intervals,
     }

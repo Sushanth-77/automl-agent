@@ -121,6 +121,10 @@ class PipelineState(TypedDict):
     # ── Feature importance (updated per evaluation) ────────────────────────────
     feature_importance: dict[str, float]  # feature_name → importance score
 
+    # ── Calibration / prediction intervals (F4) ────────────────────────────────
+    calibration_data: dict[str, Any]      # reliability diagram data (classification)
+    prediction_intervals: dict[str, Any]  # bootstrap intervals (regression)
+
     # ── Internal (not shown in report) ───────────────────────────────────────
     _cleaned_df_path: str           # path to parquet after cleaning
     _feature_df_path: str           # path to parquet after feature engineering

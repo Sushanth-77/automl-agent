@@ -307,6 +307,114 @@ def get_confusion_matrix(
     }
 
 
+# ── Calibration (classification) ───────────────────────────────────────────────
+
+def get_calibration_data(
+    estimator,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    n_bins: int = 10,
+) -> dict[str, Any]:
+    """
+    Compute calibration curve data (reliability diagram) for binary classifiers.
+
+    Returns:
+      - fraction_of_positives: list[float] — observed positive rate per bin
+      - mean_predicted_value:  list[float] — mean predicted probability per bin
+      - ece: float — Expected Calibration Error (weighted average gap)
+      - brier_score: float — Brier score (lower is better)
+
+    Returns empty dict if estimator has no predict_proba or is multiclass.
+    """
+    from sklearn.calibration import calibration_curve
+    from sklearn.metrics import brier_score_loss
+
+    if not hasattr(estimator, "predict_proba"):
+        return {}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        y_prob = estimator.predict_proba(X_test)
+
+    n_classes = y_prob.shape[1]
+    if n_classes != 2:
+        return {}  # only binary for now
+
+    prob_pos = y_prob[:, 1]
+    try:
+        frac_pos, mean_pred = calibration_curve(y_test, prob_pos, n_bins=n_bins)
+        # ECE: weighted average |frac_pos - mean_pred|
+        bin_sizes = np.histogram(prob_pos, bins=n_bins, range=(0, 1))[0]
+        total = len(prob_pos)
+        ece = float(
+            np.sum(np.abs(frac_pos - mean_pred) * bin_sizes[:len(frac_pos)] / total)
+        )
+        brier = round(float(brier_score_loss(y_test, prob_pos)), 4)
+        return {
+            "fraction_of_positives": [round(float(v), 4) for v in frac_pos],
+            "mean_predicted_value": [round(float(v), 4) for v in mean_pred],
+            "ece": round(ece, 4),
+            "brier_score": brier,
+        }
+    except Exception:
+        return {}
+
+
+# ── Prediction intervals (regression) ─────────────────────────────────────────
+
+def get_prediction_intervals(
+    estimator,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    confidence: float = 0.90,
+    n_bootstrap: int = 50,
+    random_state: int = 42,
+) -> dict[str, Any]:
+    """
+    Estimate prediction intervals for regression using bootstrap residuals.
+
+    Fits 'n_bootstrap' clones of the estimator on bootstrap samples of
+    X_test/y_test (cheap residual bootstrap), then computes per-sample
+    quantiles. Returns summary statistics.
+    """
+    import copy
+
+    rng = np.random.default_rng(random_state)
+    alpha = (1 - confidence) / 2
+    residuals_all: list[np.ndarray] = []
+
+    y_pred_base = estimator.predict(X_test)
+    base_residuals = y_test.values - y_pred_base
+
+    for _ in range(n_bootstrap):
+        idx = rng.integers(0, len(base_residuals), size=len(base_residuals))
+        residuals_all.append(base_residuals[idx])
+
+    residuals_matrix = np.stack(residuals_all, axis=0)  # (n_bootstrap, n_samples)
+    lower_q = np.quantile(residuals_matrix, alpha, axis=0)
+    upper_q = np.quantile(residuals_matrix, 1 - alpha, axis=0)
+
+    interval_widths = upper_q - lower_q
+    coverage = float(
+        np.mean(
+            (base_residuals >= lower_q) & (base_residuals <= upper_q)
+        )
+    )
+
+    return {
+        "confidence": confidence,
+        "n_bootstrap": n_bootstrap,
+        "mean_interval_width": round(float(interval_widths.mean()), 2),
+        "median_interval_width": round(float(np.median(interval_widths)), 2),
+        "empirical_coverage": round(coverage, 4),
+        # Sample of lower/upper bounds for plotting (first 50)
+        "lower_bounds": [round(float(v), 2) for v in (y_pred_base + lower_q)[:50]],
+        "upper_bounds": [round(float(v), 2) for v in (y_pred_base + upper_q)[:50]],
+        "y_pred_sample": [round(float(v), 2) for v in y_pred_base[:50]],
+        "y_true_sample": [round(float(v), 2) for v in y_test.values[:50]],
+    }
+
+
 def get_residuals(
     estimator,
     X_test: pd.DataFrame,
