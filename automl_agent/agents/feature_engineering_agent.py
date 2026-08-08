@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 import pandas as pd
 
 from automl_agent.llm_client import get_llm, get_mock_mode, invoke_llm
+from automl_agent.run_utils import get_run_dir
 from automl_agent.state import FeatureChange, PipelineState
 from automl_agent.tools.feature_tools import (
     add_aggregate_feature,
@@ -172,14 +172,20 @@ Propose targeted feature engineering changes."""
                 logger.info(f"  ✓ Added aggregate: {log_entry.get('new_column')}")
 
             elif change_type == "apply_class_weight":
-                # Apply to each candidate model config
+                # B3 fix: stable log_entry defined BEFORE the per-candidate loop
+                # so it is never None even when candidate_models is empty.
+                log_entry = {
+                    "change_type": "class_weight",
+                    "applied": True,
+                    "columns_affected": ["class_weight (model param)"],
+                }
                 updated_candidates = []
                 for model_cfg in candidate_models:
-                    updated_cfg, log_entry = apply_class_weighting(model_cfg)
+                    updated_cfg, _ = apply_class_weighting(model_cfg)
                     updated_candidates.append(updated_cfg)
                 candidate_models = updated_candidates
-                log_entry = log_entry or {"change_type": "class_weight", "applied": True}
                 logger.info("  ✓ Applied class weighting to candidate models.")
+
 
             elif change_type == "no_change":
                 logger.info(f"  — No change proposed for diagnosis '{diagnosis_id}'.")
@@ -202,7 +208,6 @@ Propose targeted feature engineering changes."""
             feature_changes.append(feature_change)
 
     # Save updated dataframe
-    from automl_agent.run_utils import get_run_dir
     run_dir = get_run_dir()
     feature_path = str(run_dir / f"features_iter{iteration}.parquet")
     df.to_parquet(feature_path, index=False)
