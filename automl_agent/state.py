@@ -118,6 +118,9 @@ class PipelineState(TypedDict):
     # ── Report ────────────────────────────────────────────────────────────────
     report_sections: dict[str, str]  # section_name → markdown text
 
+    # ── Feature importance (updated per evaluation) ────────────────────────────
+    feature_importance: dict[str, float]  # feature_name → importance score
+
     # ── Internal (not shown in report) ───────────────────────────────────────
     _cleaned_df_path: str           # path to parquet after cleaning
     _feature_df_path: str           # path to parquet after feature engineering

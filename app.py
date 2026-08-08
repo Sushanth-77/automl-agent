@@ -453,6 +453,51 @@ with tab_results:
 
         st.markdown("---")
 
+        # ── Feature Importance (F3) ────────────────────────────────────────────
+        st.markdown("### 📊 Feature Importance")
+        fi = state.get("feature_importance", {})
+        if fi:
+            import pandas as pd
+            fi_df = pd.DataFrame(
+                {"Feature": list(fi.keys()), "Importance": list(fi.values())}
+            ).sort_values("Importance", ascending=False).head(15)
+            try:
+                import altair as alt
+                chart = alt.Chart(fi_df).mark_bar(
+                    color="#667eea", cornerRadiusTopRight=4, cornerRadiusBottomRight=4
+                ).encode(
+                    x=alt.X("Importance:Q", title="Importance Score"),
+                    y=alt.Y("Feature:N", sort="-x", title=""),
+                    tooltip=["Feature", "Importance"],
+                ).properties(height=min(30 * len(fi_df) + 60, 500))
+                st.altair_chart(chart, use_container_width=True)
+            except ImportError:
+                st.bar_chart(fi_df.set_index("Feature")["Importance"])
+
+            # Overfitting indicator
+            best_eval = next((r for r in state.get("eval_results", []) if r.get("is_best")), None)
+            if best_eval:
+                from config import PRIMARY_METRICS as PM
+                pm = PM.get(state.get("task_type", "classification"), "f1_weighted")
+                test_score = best_eval.get("metrics", {}).get(pm)
+                cv_mean = best_eval.get("cv_mean")
+                if test_score is not None and cv_mean is not None:
+                    gap = abs(test_score - cv_mean)
+                    if gap > 0.05:
+                        st.warning(
+                            f"⚠️ Possible overfit — Test {pm}={test_score:.4f} vs "
+                            f"CV mean={cv_mean:.4f} (gap={gap:.4f})"
+                        )
+                    else:
+                        st.success(
+                            f"✅ Generalisation healthy — Test {pm}={test_score:.4f} ≈ "
+                            f"CV mean={cv_mean:.4f} (gap={gap:.4f})"
+                        )
+        else:
+            st.info("Feature importances will appear here after the pipeline runs.")
+
+        st.markdown("---")
+
         # ── Cleaning log
         with st.expander("🧹 Data Cleaning Log", expanded=False):
             cleaning_log = state.get("cleaning_log", [])

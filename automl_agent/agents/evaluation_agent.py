@@ -23,7 +23,9 @@ import pandas as pd
 
 from automl_agent.run_utils import get_run_dir
 from automl_agent.state import EvalResult, PipelineState
-from automl_agent.tools.model_tools import cross_validate_model, evaluate_model, load_model
+from automl_agent.tools.model_tools import (
+    cross_validate_model, evaluate_model, get_feature_importance, load_model,
+)
 from config import PRIMARY_METRICS
 
 logger = logging.getLogger(__name__)
@@ -161,9 +163,29 @@ def run_evaluation_agent(state: PipelineState) -> PipelineState:
     best_display = f"{global_best_metric:.4f}" if global_best_metric not in (float("inf"), -float("inf")) else "N/A"
     logger.info(f"  ✓ Best model this run: '{global_best_model_id}' ({primary_metric}={best_display})")
 
+    # ── Feature importance for the best model ────────────────────────────────
+    feature_importance: dict = state.get("feature_importance", {})
+    if global_best_model_id:
+        # Find best model artifact path
+        best_entry = next(
+            (m for m in trained_models if m.get("model_id") == global_best_model_id),
+            None,
+        )
+        if best_entry and best_entry.get("artifact_path"):
+            try:
+                best_est = load_model(best_entry["artifact_path"])
+                feature_names = list(X_test.columns)
+                fi = get_feature_importance(best_est, feature_names, top_n=30)
+                if fi:
+                    feature_importance = fi
+                    logger.info(f"  ✓ Feature importances extracted ({len(fi)} features)")
+            except Exception as fi_err:
+                logger.warning(f"  Feature importance extraction failed: {fi_err}")
+
     return {
         **state,
         "eval_results": eval_results,
         "_current_best_model_id": global_best_model_id,
         "_previous_best_metric": global_best_metric,
+        "feature_importance": feature_importance,
     }
