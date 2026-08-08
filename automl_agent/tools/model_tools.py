@@ -148,6 +148,45 @@ def load_model(artifact_path: str):
     return joblib.load(artifact_path)
 
 
+# ── Cross-validation ───────────────────────────────────────────────────────────
+
+def cross_validate_model(
+    estimator,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    task_type: str,
+    cv_folds: int = 5,
+) -> tuple[float, float]:
+    """
+    Run k-fold cross-validation on the TRAINING set and return (mean, std) of
+    the primary metric.
+
+    Uses StratifiedKFold for classification and KFold for regression.
+    Returns (cv_mean, cv_std) rounded to 4 dp.
+    """
+    from sklearn.model_selection import StratifiedKFold, KFold, cross_val_score
+
+    primary_metric = "f1_weighted" if task_type == "classification" else "neg_root_mean_squared_error"
+
+    if task_type == "classification":
+        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
+    else:
+        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        scores = cross_val_score(
+            estimator, X_train, y_train,
+            cv=cv, scoring=primary_metric, n_jobs=-1,
+        )
+
+    # For neg_rmse: negate back to positive RMSE
+    if primary_metric == "neg_root_mean_squared_error":
+        scores = -scores
+
+    return round(float(scores.mean()), 4), round(float(scores.std()), 4)
+
+
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
 def evaluate_model(
@@ -199,6 +238,50 @@ def evaluate_model(
 
 
 # ── Diagnostic tools ──────────────────────────────────────────────────────────
+
+def get_feature_importance(
+    estimator,
+    feature_names: list[str],
+    top_n: int = 30,
+) -> dict[str, float]:
+    """
+    Extract feature importances from a fitted estimator.
+
+    Handles:
+      - Tree-based (RandomForest, GBM, XGBoost, LightGBM): .feature_importances_
+      - Linear (LogisticRegression, Ridge): .coef_ (absolute value)
+      - Pipeline wrappers: unwraps to the final step
+
+    Returns an ordered dict of feature_name → importance (descending), top_n only.
+    """
+    # Unwrap Pipeline
+    model = estimator
+    if hasattr(estimator, "named_steps"):
+        # Get the last step in the pipeline
+        steps = list(estimator.named_steps.values())
+        model = steps[-1]
+
+    importances: np.ndarray | None = None
+
+    if hasattr(model, "feature_importances_"):
+        importances = model.feature_importances_
+    elif hasattr(model, "coef_"):
+        coef = model.coef_
+        if coef.ndim > 1:
+            importances = np.abs(coef).mean(axis=0)
+        else:
+            importances = np.abs(coef)
+
+    if importances is None or len(importances) != len(feature_names):
+        return {}
+
+    # Sort descending and cap at top_n
+    idx_sorted = np.argsort(importances)[::-1][:top_n]
+    return {
+        feature_names[i]: round(float(importances[i]), 6)
+        for i in idx_sorted
+    }
+
 
 def get_confusion_matrix(
     estimator,

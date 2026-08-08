@@ -45,6 +45,10 @@ class EvalResult(TypedDict):
     iteration: int
     metrics: dict[str, float]
     is_best: bool
+    # Cross-validation scores (added Feature 2)
+    cv_mean: float | None
+    cv_std: float | None
+    cv_folds: int | None
 
 
 class ErrorAnalysisEntry(TypedDict):

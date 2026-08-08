@@ -382,6 +382,14 @@ with tab_results:
             for r in eval_results:
                 row = {"Iteration": r["iteration"], "Model ID": r["model_id"]}
                 row.update(r.get("metrics", {}))
+                # Cross-validation columns
+                cv_mean = r.get("cv_mean")
+                cv_std = r.get("cv_std")
+                cv_folds = r.get("cv_folds")
+                if cv_mean is not None and cv_std is not None:
+                    row["CV mean"] = cv_mean
+                    row["CV std"] = cv_std
+                    row["CV folds"] = cv_folds
                 row["Best"] = "⭐" if r.get("is_best") else ""
                 rows.append(row)
             df_eval = pd.DataFrame(rows)
