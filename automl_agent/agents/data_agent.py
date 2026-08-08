@@ -150,13 +150,42 @@ def run_data_agent(state: PipelineState) -> PipelineState:
         elif action == "no_action":
             logger.debug(f"    No action on '{col}'.")
 
+    # ── Safety fallback ──────────────────────────────────────────────────────
+    # Any non-numeric columns not handled by the cleaning plan will crash sklearn.
+    # Drop them with a logged warning rather than failing at training time.
+    # Note: pandas 3.x uses StringDtype for some string columns; check with is_numeric_dtype.
+    import pandas.api.types as pat
+    remaining_str_cols = [
+        c for c in df.columns
+        if not pat.is_numeric_dtype(df[c]) and c != target
+    ]
+    for col in remaining_str_cols:
+        df = df.drop(columns=[col])
+        cleaning_log.append({
+            "column": col,
+            "action": "drop_column",
+            "reason": "[auto-fallback] Non-numeric column not handled by cleaning plan; "
+                      "dropped to prevent training failure.",
+        })
+        logger.warning(f"    [fallback] Dropped remaining non-numeric column '{col}'")
+
+    # Ensure target is numeric (label-encode if not already)
+    if not pat.is_numeric_dtype(df[target]):
+        df[target] = pd.Categorical(df[target]).codes
+        cleaning_log.append({
+            "column": target,
+            "action": "encode_target",
+            "reason": "[auto-fallback] Target column was non-numeric; label-encoded.",
+        })
+        logger.warning(f"    [fallback] Label-encoded non-numeric target '{target}'")
+
     # Save cleaned dataframe
     from automl_agent.run_utils import get_run_dir
     run_dir = get_run_dir()
     cleaned_path = str(run_dir / "cleaned.parquet")
     df.to_parquet(cleaned_path, index=False)
-    logger.info(f"  ✓ Cleaned data saved → {cleaned_path}")
-    logger.info(f"  ✓ {len(cleaning_log)} cleaning steps logged.")
+    logger.info(f"  Cleaned data saved to {cleaned_path}")
+    logger.info(f"  {len(cleaning_log)} cleaning steps logged.")
 
     return {
         **state,

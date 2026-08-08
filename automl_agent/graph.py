@@ -306,10 +306,14 @@ def run_pipeline(
 
     graph = build_graph()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    import io as _io
+    _utf8_out = _io.TextIOWrapper(
+        getattr(__import__('sys').stdout, 'buffer', None) or __import__('sys').stdout,
+        encoding='utf-8', errors='replace'
+    ) if hasattr(__import__('sys').stdout, 'buffer') else __import__('sys').stdout
+    _handler = logging.StreamHandler(_utf8_out)
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
     logger.info(f"🚀 AutoML Agent pipeline starting | run_id={run_id}")
     logger.info(f"   Dataset: {dataset_path} | Target: {target_column} | Max iters: {max_iterations}")
 

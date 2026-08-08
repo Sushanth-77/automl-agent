@@ -71,13 +71,15 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Configure logging
+    # Configure logging — use utf-8 explicitly on Windows to allow emoji in messages
+    import sys, io
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    # Force UTF-8 on stdout to avoid cp1252 errors on Windows
+    utf8_stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace') \
+        if hasattr(sys.stdout, 'buffer') else sys.stdout
+    handler = logging.StreamHandler(utf8_stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    logging.basicConfig(level=log_level, handlers=[handler], force=True)
     logger = logging.getLogger("automl_agent.run")
 
     # Set mock mode env var so all modules pick it up
@@ -114,9 +116,9 @@ def main() -> None:
         run_id=args.run_id,
     )
 
-    # Print summary
+    # Print summary — use ASCII only for Windows cp1252 compatibility
     print("\n" + "="*60)
-    print("✅ AutoML Agent Pipeline Complete")
+    print("AutoML Agent Pipeline Complete!")
     print("="*60)
     print(f"  Task type:    {final_state.get('task_type', 'N/A')}")
     print(f"  Best model:   {final_state.get('_current_best_model_id', 'N/A')}")
@@ -143,9 +145,9 @@ def main() -> None:
 
     from config import RUNS_DIR
     run_dir = RUNS_DIR / (args.run_id or "current")
-    print(f"\n  📁 Run output: {run_dir}")
-    print(f"  📄 State JSON: {run_dir / 'state.json'}")
-    print(f"  📝 Report:     {run_dir / 'report.md'}")
+    print(f"\n  Run output: {run_dir}")
+    print(f"  State JSON: {run_dir / 'state.json'}")
+    print(f"  Report:     {run_dir / 'report.md'}")
     print("="*60)
 
 

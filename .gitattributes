@@ -1,0 +1,17 @@
+# Consistent line endings across OSes
+* text=auto eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+
+# Binary files
+*.joblib binary
+*.pkl binary
+*.parquet binary
+*.png binary
+*.jpg binary
+*.gif binary
