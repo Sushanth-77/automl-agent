@@ -215,3 +215,46 @@ def load_dataset(name: str) -> DatasetInfo:
             f"Unknown dataset '{name}'. Available: {available}"
         )
     return DATASET_REGISTRY[name]()
+
+
+def load_from_path(file_path: str, target_column: str) -> DatasetInfo:
+    """
+    Load any CSV or Parquet file from disk as a DatasetInfo.
+
+    Used by the Streamlit dashboard custom-upload flow.
+    Returns DatasetInfo with description auto-generated from the dataframe shape.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset file not found: {file_path}")
+
+    if path.suffix.lower() == ".parquet":
+        df = pd.read_parquet(file_path)
+    elif path.suffix.lower() in (".csv", ".tsv"):
+        sep = "\t" if path.suffix.lower() == ".tsv" else ","
+        df = pd.read_csv(file_path, sep=sep)
+    else:
+        raise ValueError(f"Unsupported file format: {path.suffix}. Use CSV or Parquet.")
+
+    if target_column not in df.columns:
+        raise ValueError(
+            f"Target column '{target_column}' not found in {path.name}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    n_unique_target = df[target_column].nunique()
+    task_hint = "regression" if n_unique_target > 20 else "classification"
+
+    description = (
+        f"Custom dataset: {path.name}. "
+        f"{df.shape[0]} rows, {df.shape[1]} columns. "
+        f"Target: '{target_column}' ({n_unique_target} unique values → likely {task_hint})."
+    )
+    logger.info(f"  Loaded custom dataset from {file_path}: {df.shape}")
+
+    return DatasetInfo(
+        df=df,
+        target_column=target_column,
+        description=description,
+        dataset_path=str(path),
+    )
