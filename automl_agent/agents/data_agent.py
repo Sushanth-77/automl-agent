@@ -16,8 +16,10 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+import pandas.api.types as pat
 
 from automl_agent.llm_client import get_llm, get_mock_mode, invoke_llm
+from automl_agent.run_utils import get_run_dir
 from automl_agent.state import PipelineState
 from automl_agent.tools.data_tools import (
     drop_column,
@@ -154,7 +156,6 @@ def run_data_agent(state: PipelineState) -> PipelineState:
     # Any non-numeric columns not handled by the cleaning plan will crash sklearn.
     # Drop them with a logged warning rather than failing at training time.
     # Note: pandas 3.x uses StringDtype for some string columns; check with is_numeric_dtype.
-    import pandas.api.types as pat
     remaining_str_cols = [
         c for c in df.columns
         if not pat.is_numeric_dtype(df[c]) and c != target
@@ -180,7 +181,6 @@ def run_data_agent(state: PipelineState) -> PipelineState:
         logger.warning(f"    [fallback] Label-encoded non-numeric target '{target}'")
 
     # Save cleaned dataframe
-    from automl_agent.run_utils import get_run_dir
     run_dir = get_run_dir()
     cleaned_path = str(run_dir / "cleaned.parquet")
     df.to_parquet(cleaned_path, index=False)
