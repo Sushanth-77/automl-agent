@@ -242,9 +242,10 @@ def _get_mock_response(agent_name: str, user_prompt: str = "") -> str:
     """
     Return a deterministic mock response for the given agent.
 
-    For task_inference, we actually inspect the user_prompt to return the
-    correct task type (regression vs classification) based on n_unique.
-    This keeps the mock realistic without API calls.
+    For task_inference: inspects n_unique from user_prompt to return correct task type.
+    For data_cleaning: generates a real cleaning plan from the actual column profile
+                       instead of returning hardcoded Titanic column names.
+    All other agents return canned JSON responses.
     """
     if agent_name == "task_inference":
         # Try to extract n_unique from the prompt JSON
@@ -271,6 +272,80 @@ def _get_mock_response(agent_name: str, user_prompt: str = "") -> str:
                     "→ binary classification."
                 ),
             })
+
+    if agent_name == "data_cleaning":
+        # Build a real cleaning plan from the actual column profile in the user_prompt.
+        # This makes mock mode work correctly on ANY dataset, not just Titanic.
+        try:
+            # Extract the JSON profile from the prompt
+            profile_str = user_prompt.replace("Dataset profile:\n", "").replace("\n\nProduce a cleaning plan.", "")
+            profile = json.loads(profile_str)
+            columns = profile.get("columns", {})
+        except Exception:
+            columns = {}
+
+        cleaning_plan = []
+        for col, info in columns.items():
+            dtype = info.get("dtype", "object")
+            null_pct = info.get("null_pct", 0.0)
+            n_unique = info.get("n_unique", 1)
+            is_numeric = info.get("is_numeric", False)
+            likely_id = info.get("likely_id", False)
+
+            # Drop likely ID columns or >80% null
+            if likely_id or null_pct > 80:
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "drop_column",
+                    "strategy": "",
+                    "reason": (
+                        f"[MOCK] '{col}' has {null_pct:.1f}% nulls or looks like an ID column "
+                        "— too sparse/unique to be informative."
+                    ),
+                })
+            # Impute numeric nulls
+            elif is_numeric and null_pct > 0.0:
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "impute_missing",
+                    "strategy": "median",
+                    "reason": f"[MOCK] '{col}' is numeric with {null_pct:.1f}% nulls → impute median.",
+                })
+            # Encode low-cardinality categoricals
+            elif not is_numeric and n_unique <= 2:
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "encode_categoricals",
+                    "strategy": "label",
+                    "reason": f"[MOCK] '{col}' is binary categorical → label encode.",
+                })
+            elif not is_numeric and n_unique <= 8:
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "encode_categoricals",
+                    "strategy": "onehot",
+                    "reason": f"[MOCK] '{col}' has {n_unique} categories → one-hot encode.",
+                })
+            elif not is_numeric and n_unique > 8:
+                # High-cardinality string → drop (safety; live LLM might handle differently)
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "drop_column",
+                    "strategy": "",
+                    "reason": (
+                        f"[MOCK] '{col}' has {n_unique} unique string values — "
+                        "too high-cardinality for simple encoding; dropping."
+                    ),
+                })
+            else:
+                cleaning_plan.append({
+                    "column": col,
+                    "action": "no_action",
+                    "strategy": "",
+                    "reason": f"[MOCK] '{col}' is clean numeric — no action needed.",
+                })
+
+        return json.dumps({"cleaning_plan": cleaning_plan}, indent=2)
 
     canned = _MOCK_RESPONSES.get(agent_name, {"mock": f"[MOCK] No canned response for '{agent_name}'"})
     return json.dumps(canned, indent=2)
